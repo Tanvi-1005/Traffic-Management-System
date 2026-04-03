@@ -1,0 +1,144 @@
+version: "3.9"
+
+services:
+  # ── API Server ──────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: utms-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://utms:utms_secret@postgres:5432/utms_db
+      - REDIS_URL=redis://redis:6379/0
+      - MQTT_BROKER=mqtt://mosquitto:1883
+      - ML_MODEL_PATH=/app/models
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=production
+    volumes:
+      - ./models:/app/models:ro
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Dashboard (React) ───────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./src/dashboard
+      dockerfile: Dockerfile
+    container_name: utms-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000/ws
+      - VITE_MAPBOX_TOKEN=${MAPBOX_TOKEN}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── ML Model Server ─────────────────────────────────────────────────────────
+  ml-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml
+    container_name: utms-ml-server
+    ports:
+      - "8001:8001"
+    environment:
+      - MODEL_DIR=/app/models
+      - REDIS_URL=redis://redis:6379/1
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ── PostgreSQL + TimescaleDB ────────────────────────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: utms-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: utms_db
+      POSTGRES_USER: utms
+      POSTGRES_PASSWORD: utms_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U utms -d utms_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Cache + Pub/Sub) ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: utms-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── MQTT Broker (Mosquitto) ─────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: utms-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"       # WebSocket listener
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+    restart: unless-stopped
+
+  # ── Grafana (Monitoring) ────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: utms-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/utms.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/dashboards:/etc/grafana/dashboards:ro
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  mosquitto_data:
+  mosquitto_logs:
+  grafana_data:
+
+networks:
+  default:
+    name: utms-network
