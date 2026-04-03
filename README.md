@@ -319,9 +319,8 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 | Role | Contact |
 |---|---|
-| Project Lead | team24@utms.dev |
-| Technical Queries | dev@utms.dev |
-| Partnership & Business | partnerships@utms.dev |
+| Project Lead | yeoletanvi0@gmail.com |
+| Technical Queries | yeoletanvi0@gmail.com |
 
 ---
 
